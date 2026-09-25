@@ -10,6 +10,7 @@ from itertools import combinations
 from typing import Dict, List, Sequence, Protocol
 import numpy as np
 import pandas as pd
+from agentic_selection.data.preprocessing import CandidatePool
 
 # --- Data Structures ---
 @dataclass
@@ -104,12 +105,10 @@ def _outlier_row_fraction(df: pd.DataFrame, attribute_cols: Sequence[str]) -> fl
 
 
 def summarize_pool(
-    df: pd.DataFrame,
-    attribute_cols: Sequence[str],
+    pool: CandidatePool,
     missing_df: pd.DataFrame | None = None,
 ) -> PoolPerception:
-    """Compute a PoolPerception summary for `df` restricted to
-    `attribute_cols`.
+    """Compute a PoolPerception summary for `pool`.
 
     Parameters
     ----------
@@ -125,7 +124,8 @@ def summarize_pool(
         imputed, per the data pipeline's contract with baselines/).
         If omitted, missing_fraction is computed from `df` itself.
     """
-    attribute_cols = list(attribute_cols)
+    attribute_cols = list(pool.attribute_cols)
+    df = pool.df
     sub = df.loc[:, attribute_cols]
 
     variance = {c: float(sub[c].var(ddof=0)) if sub[c].notna().any() else 0.0 for c in attribute_cols}

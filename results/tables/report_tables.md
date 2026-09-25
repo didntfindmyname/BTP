@@ -1,5 +1,5 @@
 <!--
-Report Generated: 2026-09-24 01:36:27
+Report Generated: 2026-09-26 00:06:13
 LLM Provider: ollama
 LLM Model: qwen2.5:1.5b
 Note: This header captures the experimental environment that produced these results.
@@ -29,8 +29,8 @@ Note: This header captures the experimental environment that produced these resu
 
 | condition            |   fallback_trigger_rate |   mean_latency_seconds |   mean_api_calls |   n_decisions |
 |:---------------------|------------------------:|-----------------------:|-----------------:|--------------:|
-| Agent (weights only) |                       0 |                33.0587 |                1 |            14 |
-| Agent (full)         |                       0 |                33.9312 |                1 |            14 |
+| Agent (weights only) |                       0 |                31.3193 |                1 |            14 |
+| Agent (full)         |                       0 |                29.3776 |                1 |            14 |
 
 
 ### Table 5.2: Mean adaptation lag under drift, by condition

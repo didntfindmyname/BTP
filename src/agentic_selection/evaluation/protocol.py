@@ -26,9 +26,10 @@ import pandas as pd
 from agentic_selection.agent.controller import AgentController
 from agentic_selection.baselines import GLOBAL_FIXED_WEIGHTS, TASK_LOOKUP_TABLE, topsis
 from agentic_selection.baselines.lookup_table import get_lookup_weights
-from agentic_selection.data.preprocessing import sample_candidate_pool
+from agentic_selection.data.preprocessing import CandidatePool, sample_candidate_pool
 from agentic_selection.drift.simulate import find_common_top_choice, simulate_drift_sequence
 from agentic_selection.evaluation.metrics import adaptation_lag, regret
+from agentic_selection.evaluation.runner import ExperimentRunner
 from agentic_selection.evaluation.storage import ExperimentStorage
 from agentic_selection.tasks import HELD_OUT_TASKS, TASK_PROFILES, HeldOutTask, TaskProfile
 
@@ -103,10 +104,11 @@ def run_stable_protocol(
         if not storage.should_run({"task_key": task_key, "pool_seed": seed, "condition": condition}):
             return
 
-        pool = sample_candidate_pool(normalized_df, n=pool_size, seed=seed)
+        pool_df = sample_candidate_pool(normalized_df, n=pool_size, seed=seed)
+        pool = CandidatePool(pool_df, attribute_cols)
 
         if condition == "global_fixed":
-            scores = topsis(pool, global_fixed_weights, attribute_cols)
+            scores = topsis(pool, global_fixed_weights)
             fallback, latency, api_calls = False, 0.0, 0
             top_id = scores.sort_values(ascending=False).index[0]
             strategy = "topsis"
@@ -114,7 +116,7 @@ def run_stable_protocol(
             prompt_tokens, completion_tokens = 0, 0
         elif condition == "lookup_table":
             w = lookup_weights_fn(task_description if task_kind == "held_out" else task_key)
-            scores = topsis(pool, w, attribute_cols)
+            scores = topsis(pool, w)
             fallback, latency, api_calls = False, 0.0, 0
             top_id = scores.sort_values(ascending=False).index[0]
             strategy = "topsis"
@@ -137,7 +139,7 @@ def run_stable_protocol(
         else:
             raise ValueError(f"unknown condition: {condition}")
 
-        r = regret(pool, scores, ref_weights, attribute_cols)
+        r = regret(pool.df, scores, ref_weights, attribute_cols)
         row = {
             "task_key": task_key,
             "task_kind": task_kind,
@@ -157,22 +159,17 @@ def run_stable_protocol(
         }
         storage.record(row)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = []
-        for task_key, task_kind, task_description in all_tasks:
-            ref_weights = reference_weights_by_key[task_key]
-            for pool_i in range(n_pools):
-                seed = base_seed + pool_i
-                for condition in conditions:
-                    futures.append(
-                        executor.submit(
-                            _run_single_condition, task_key, task_kind, task_description, seed, condition, ref_weights
-                        )
-                    )
-        # Ensure exceptions are raised
-        for future in concurrent.futures.as_completed(futures):
-            future.result()
+    trials = []
+    for task_key, task_kind, task_description in all_tasks:
+        ref_weights = reference_weights_by_key[task_key]
+        for pool_i in range(n_pools):
+            seed = base_seed + pool_i
+            for condition in conditions:
+                trials.append(
+                    lambda tk=task_key, tkind=task_kind, td=task_description, s=seed, c=condition, rw=ref_weights: _run_single_condition(tk, tkind, td, s, c, rw)
+                )
 
+    ExperimentRunner(max_workers=10).execute(trials)
     return storage.load_all()
 
 
@@ -239,10 +236,11 @@ def run_drift_protocol(
         target = None
         for attempt in range(max_seed_attempts_for_consensus):
             candidate_seed = trial_seed * 1000 + attempt
-            candidate_pool = sample_candidate_pool(normalized_df, n=pool_size, seed=candidate_seed)
+            pool_df = sample_candidate_pool(normalized_df, n=pool_size, seed=candidate_seed)
+            candidate_pool = CandidatePool(pool_df, attribute_cols)
             methods = {
-                "global_fixed": lambda p: topsis(p, GLOBAL_FIXED_WEIGHTS, attribute_cols),
-                "lookup_table": lambda p: topsis(p, TASK_LOOKUP_TABLE[profile.key], attribute_cols),
+                "global_fixed": lambda p: topsis(p, GLOBAL_FIXED_WEIGHTS),
+                "lookup_table": lambda p: topsis(p, TASK_LOOKUP_TABLE[profile.key]),
             }
             t = find_common_top_choice(candidate_pool, methods)
             if t is not None:
@@ -256,7 +254,7 @@ def run_drift_protocol(
             return
 
         seq = simulate_drift_sequence(
-            pool,
+            pool.df,
             attribute_cols,
             target_service_id=target,
             degraded_attributes=default_degraded,
@@ -272,17 +270,17 @@ def run_drift_protocol(
                 continue
 
             if condition == "global_fixed":
-                decide_fn = lambda p: topsis(p, GLOBAL_FIXED_WEIGHTS, attribute_cols).sort_values(ascending=False).index[0]
+                decide_fn = lambda p: topsis(CandidatePool(p, attribute_cols), GLOBAL_FIXED_WEIGHTS).sort_values(ascending=False).index[0]
                 reeval = static_reevaluation_period
             elif condition == "lookup_table":
                 w = TASK_LOOKUP_TABLE[profile.key]
-                decide_fn = lambda p, w=w: topsis(p, w, attribute_cols).sort_values(ascending=False).index[0]
+                decide_fn = lambda p, w=w: topsis(CandidatePool(p, attribute_cols), w).sort_values(ascending=False).index[0]
                 reeval = static_reevaluation_period
             elif condition in ("agent_weights_only", "agent_full", "rag_agent"):
                 strategy_override = "topsis" if condition == "agent_weights_only" else None
                 ctrl = rag_controller if condition == "rag_agent" and rag_controller else agent_controller
                 decide_fn = lambda p, so=strategy_override, c=ctrl: c.decide(
-                    profile.description, p, strategy_override=so
+                    profile.description, CandidatePool(p, attribute_cols), strategy_override=so
                 ).top_service_id()
                 reeval = None
             else:
@@ -311,17 +309,15 @@ def run_drift_protocol(
             }
             storage.record(row)
 
-    with concurrent.futures.ThreadPoolExecutor(max_workers=10) as executor:
-        futures = []
-        for profile in task_profiles:
-            default_degraded = (degraded_attributes_by_profile or {}).get(
-                profile.key, profile.dominant_attributes[:2] or profile.dominant_attributes
+    trials = []
+    for profile in task_profiles:
+        default_degraded = (degraded_attributes_by_profile or {}).get(
+            profile.key, profile.dominant_attributes[:2] or profile.dominant_attributes
+        )
+        for trial_i in range(n_trials):
+            trials.append(
+                lambda p=profile, t_i=trial_i, d=default_degraded: _run_single_drift_trial(p, t_i, d)
             )
-            for trial_i in range(n_trials):
-                futures.append(
-                    executor.submit(_run_single_drift_trial, profile, trial_i, default_degraded)
-                )
-        for future in concurrent.futures.as_completed(futures):
-            future.result()
 
+    ExperimentRunner(max_workers=10).execute(trials)
     return storage.load_all()

@@ -33,10 +33,12 @@ from typing import Callable, Dict, List, Optional, Sequence, Tuple
 import numpy as np
 import pandas as pd
 
+from agentic_selection.data.preprocessing import CandidatePool
+
 
 def find_common_top_choice(
-    pool: pd.DataFrame,
-    methods: Dict[str, Callable[[pd.DataFrame], pd.Series]],
+    pool: CandidatePool,
+    methods: Dict[str, Callable[[CandidatePool], pd.Series]],
 ) -> Optional[object]:
     """Find a service_id that is the #1 ranked choice under every method
     in `methods` (each a callable pool -> score Series, higher=better).

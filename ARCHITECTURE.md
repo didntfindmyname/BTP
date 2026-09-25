@@ -8,13 +8,13 @@ This project implements an **Agentic Cloud Service Selection** framework, compar
 flowchart TD
     subgraph DataPipeline [Data Pipeline]
         D1["QWS / WS-DREAM Data"] --> D2["Normalize 0.0 - 1.0"]
-        D2 --> D3["Candidate Pool"]
+        D2 --> D3["CandidatePool<br>(DataFrame + Schema)"]
     end
 
     subgraph AgenticLoop [Agentic Reasoning Loop OODA]
         D3 --> P["Perception Layer<br>(Converts to Text)"]
-        P --> R["Reasoning Layer<br>(Prompt Construction)"]
-        R <--> M["Memory<br>(Past Decisions)"]
+        P --> R["Reasoning Layer<br>(ReasoningStrategy)"]
+        R <--> M["Memory / Cache<br>(SQLite & JSONL)"]
         R --> LLM((LLM Backend))
         LLM --> R
         R --> C["Controller<br>(Dispatch Strategy)"]
@@ -37,18 +37,20 @@ The architecture is heavily modularized to ensure LLM integrations are strictly 
 
 ### 1. Data Pipeline
 - **`scripts/01_download_data.py` & `scripts/02_prepare_data.py`**: Fetches and prepares the QWS and WS-DREAM datasets. Data is normalized to a `[0, 1]` scale where `1.0` always represents the highest utility (e.g., lower latency = higher score).
+- **`src/agentic_selection/data/preprocessing.py`**: Handles normalizations and introduces the unified `CandidatePool` dataclass, which strictly couples candidate DataFrames with their attribute schemas to prevent signature bloat across the pipeline.
 - **`src/agentic_selection/evaluation/storage.py`**: Defines abstractions for incrementally appending results to local CSV files to support long-running, interruptible experiments.
 
 ### 2. The Agent Framework (`src/agentic_selection/agent/`)
 The agent simulates an OODA (Observe, Orient, Decide, Act) loop across several decoupled files:
 - **`llm_backends.py`**: Handles API communication. Currently supports Anthropic, OpenAI, and zero-cost local execution via `OllamaBackend`. Features robust exponential backoff retries to prevent connection drops during long evaluations. Tracks `prompt_tokens` and `completion_tokens`.
 - **`perception.py`**: The "Observe" phase. Converts Pandas DataFrames into semantic markdown tables that the LLM can easily parse.
-- **`reasoning.py`**: The "Orient" phase. Constructs the prompt and extracts structured JSON containing the LLM's inferred attribute weights, strategy, and justification.
+- **`reasoning.py`**: The "Orient" phase. Constructs the prompt and extracts structured JSON containing the LLM's inferred attribute weights, strategy, and justification. Uses a pluggable `ReasoningStrategy` interface (e.g., `DirectWeightReasoner` and `ClassificationReasoner`) to easily swap how the LLM arrives at its weights.
 - **`memory.py`**: The "Remember" phase. Stores historical decisions and justifications, allowing the agent to perform few-shot adaptation if drift is detected.
-- **`controller.py`**: The orchestrator. Coordinates perception, reasoning, and memory, and dispatches the final ranking to the underlying MCDM functions based on the LLM's strategy choice.
+- **`controller.py`**: The orchestrator. Coordinates perception, reasoning, and memory. Utilizes an `SQLiteCache` to entirely bypass redundant LLM API calls, and dispatches the final ranking to the underlying MCDM functions based on the LLM's strategy choice.
 
 ### 3. Evaluation Protocols (`src/agentic_selection/evaluation/`)
 - **`protocol.py`**: Defines `run_stable_protocol` (static context) and `run_drift_protocol` (dynamic context where optimal weights shift abruptly).
+- **`runner.py`**: Provides the `ExperimentRunner` which leverages thread-pooling to evaluate multiple pools concurrently, radically accelerating experiment times.
 - **`metrics.py`**: Calculates Regret, Top-1 Accuracy, and Adaptation Lag.
 
 ### 4. Orchestration & Reporting

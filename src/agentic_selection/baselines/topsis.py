@@ -20,14 +20,14 @@ from typing import Mapping, Sequence
 
 import numpy as np
 import pandas as pd
+from agentic_selection.data.preprocessing import CandidatePool
 
 from agentic_selection.baselines.weighted_sum import _weights_to_array
 
 
 def topsis(
-    df: pd.DataFrame,
+    pool: CandidatePool,
     weights: Mapping[str, float],
-    attribute_cols: Sequence[str],
 ) -> pd.Series:
     """Compute TOPSIS closeness coefficients for every row of ``df``.
 
@@ -38,15 +38,15 @@ def topsis(
         [0, 1], indexed like ``df``. Higher is better (closer to the ideal
         point, farther from the anti-ideal point).
     """
-    if len(attribute_cols) == 0:
+    if len(pool.attribute_cols) == 0:
         raise ValueError("attribute_cols must be non-empty")
-    for c in attribute_cols:
-        if c not in df.columns:
-            raise KeyError(f"attribute column '{c}' not found in df.columns={list(df.columns)}")
-    if len(df) == 0:
+    for c in pool.attribute_cols:
+        if c not in pool.df.columns:
+            raise KeyError(f"attribute column '{c}' not found in df.columns={list(pool.df.columns)}")
+    if len(pool.df) == 0:
         return pd.Series([], dtype=float, name="topsis_closeness")
 
-    sub = df.loc[:, list(attribute_cols)]
+    sub = pool.df.loc[:, list(pool.attribute_cols)]
     if sub.isnull().any().any():
         bad_cols = sub.columns[sub.isnull().any()].tolist()
         raise ValueError(
@@ -54,15 +54,15 @@ def topsis(
             f"impute or drop before scoring (see data/preprocessing.py)."
         )
 
-    w = _weights_to_array(weights, attribute_cols)
+    w = _weights_to_array(weights, pool.attribute_cols)
     X = sub.to_numpy(dtype=float)
     V = X * w  # weighted normalized matrix, shape (n, m)
 
-    if len(df) == 1:
+    if len(pool.df) == 1:
         # A single candidate is trivially both the ideal and anti-ideal
         # point along every attribute it doesn't share with anyone else;
         # define closeness as 1.0 (it is, uncontestedly, the best of one).
-        return pd.Series([1.0], index=df.index, name="topsis_closeness")
+        return pd.Series([1.0], index=pool.df.index, name="topsis_closeness")
 
     a_plus = V.max(axis=0)
     a_minus = V.min(axis=0)
@@ -78,16 +78,15 @@ def topsis(
     # than propagating a NaN from 0/0.
     closeness = np.where(denom > 1e-12, d_minus / np.where(denom > 1e-12, denom, 1.0), 1.0)
 
-    return pd.Series(closeness, index=df.index, name="topsis_closeness")
+    return pd.Series(closeness, index=pool.df.index, name="topsis_closeness")
 
 
 def rank_topsis(
-    df: pd.DataFrame,
+    pool: CandidatePool,
     weights: Mapping[str, float],
-    attribute_cols: Sequence[str],
 ) -> pd.DataFrame:
     """Convenience wrapper: returns df sorted best-first with a score column."""
-    scores = topsis(df, weights, attribute_cols)
-    out = df.copy()
+    scores = topsis(pool, weights)
+    out = pool.df.copy()
     out["score"] = scores
     return out.sort_values("score", ascending=False)

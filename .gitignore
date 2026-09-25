@@ -14,6 +14,8 @@ dist/
 .venv/
 venv/
 env/
+uv.lock
+pyproject.toml
 
 # Pytest / Coverage
 .pytest_cache/
@@ -51,6 +53,7 @@ llm_cache.db
 # Experiment Results
 # Ignore all raw results/tables by default, but explicitly track final reports
 # -----------------------------------------------------------------------------
+results/past_results__*
 results/tables/*.csv
 results/tables/*.md
 !results/tables/.gitkeep
@@ -90,3 +93,7 @@ results/figures/*.png
 !results/figures/wsdream_complete_comparison.png
 !results/figures/wsdream_temporal_behavior.png
 !results/figures/wsdream_profile_comparison.png
+
+# Cache files
+*.db
+llm_cache.db

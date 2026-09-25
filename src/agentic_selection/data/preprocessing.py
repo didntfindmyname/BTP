@@ -19,6 +19,7 @@ Call order for a typical experiment:
 """
 from __future__ import annotations
 
+from dataclasses import dataclass
 from typing import Iterable, Optional, Sequence
 
 import numpy as np
@@ -119,7 +120,25 @@ def sample_candidate_pool(
             f"Cannot sample n={n} without replacement from a pool of "
             f"size {len(df)}. Pass replace=True or reduce n."
         )
-    return df.sample(n=n, random_state=seed, replace=replace).copy()
+    sampled_df = df.sample(n=n, random_state=seed, replace=replace).copy()
+    # Note: caller should wrap in CandidatePool if needed, or sample_candidate_pool can return it.
+    # To avoid circularity we just return df, and caller wraps it.
+    return sampled_df
+
+@dataclass
+class CandidatePool:
+    df: pd.DataFrame
+    attribute_cols: Sequence[str]
+    
+    def to_numpy(self) -> np.ndarray:
+        return self.df.loc[:, list(self.attribute_cols)].to_numpy(dtype=float)
+        
+    def __len__(self) -> int:
+        return len(self.df)
+        
+    @property
+    def index(self):
+        return self.df.index
 
 
 def inject_missingness(

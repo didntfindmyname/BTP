@@ -28,9 +28,11 @@ from agentic_selection.agent.reasoning import (
 from agentic_selection.agent.validation import ValidationResult, validate_agent_output
 from agentic_selection.baselines import skyline_then_topsis, topsis, weighted_sum
 
+from agentic_selection.data.preprocessing import CandidatePool
+
 # --- Action Dispatch ---
 
-ACTION_DISPATCH: Dict[str, Callable[[pd.DataFrame, dict, Sequence[str]], pd.Series]] = {
+ACTION_DISPATCH: Dict[str, Callable[[CandidatePool, dict], pd.Series]] = {
     "weighted_sum": weighted_sum,
     "topsis": topsis,
     "skyline_then_topsis": skyline_then_topsis,
@@ -124,7 +126,7 @@ class AgentController:
     def decide(
         self,
         task_description: str,
-        candidate_pool: pd.DataFrame,
+        candidate_pool: CandidatePool,
         strategy_override: Optional[str] = None,
         use_memory: bool = True,
     ) -> AgentDecision:
@@ -146,7 +148,7 @@ class AgentController:
             memory-free ones").
         """
         original_index = candidate_pool.index
-        perception = summarize_pool(candidate_pool, self.attribute_cols)
+        perception = summarize_pool(candidate_pool)
 
         digest = ""
         if use_memory:
@@ -191,7 +193,7 @@ class AgentController:
                 f"strategy '{effective_strategy}' is not in ACTION_DISPATCH "
                 f"{list(ACTION_DISPATCH)}"
             )
-        ranking = action_fn(candidate_pool, validated.weights, self.attribute_cols)
+        ranking = action_fn(candidate_pool, validated.weights)
 
         record = make_record(
             task_description=task_description,

@@ -20,11 +20,11 @@ import numpy as np
 import pandas as pd
 
 from agentic_selection.baselines.topsis import topsis
+from agentic_selection.data.preprocessing import CandidatePool
 
 
 def skyline(
-    df: pd.DataFrame,
-    attribute_cols: Sequence[str],
+    pool: CandidatePool,
     chunk_size: int = 500,
 ) -> pd.Index:
     """Return the index labels of the non-dominated (skyline) rows of ``df``.
@@ -44,48 +44,62 @@ def skyline(
     pd.Index
         Subset of df.index that is Pareto-optimal (non-dominated).
     """
-    if len(attribute_cols) == 0:
+    if len(pool.attribute_cols) == 0:
         raise ValueError("attribute_cols must be non-empty")
-    for c in attribute_cols:
-        if c not in df.columns:
-            raise KeyError(f"attribute column '{c}' not found in df.columns={list(df.columns)}")
-    n = len(df)
+    for c in pool.attribute_cols:
+        if c not in pool.df.columns:
+            raise KeyError(f"attribute column '{c}' not found in df.columns={list(pool.df.columns)}")
+    n = len(pool.df)
     if n == 0:
-        return df.index[:0]
+        return pool.df.index[:0]
     if n == 1:
-        return df.index
+        return pool.df.index
 
-    X = df.loc[:, list(attribute_cols)].to_numpy(dtype=float)
+    X = pool.df.loc[:, list(pool.attribute_cols)].to_numpy(dtype=float)
     if np.isnan(X).any():
-        bad_cols = df.loc[:, list(attribute_cols)].columns[
-            df.loc[:, list(attribute_cols)].isnull().any()
+        bad_cols = pool.df.loc[:, list(pool.attribute_cols)].columns[
+            pool.df.loc[:, list(pool.attribute_cols)].isnull().any()
         ].tolist()
         raise ValueError(
             f"skyline received NaN values in columns {bad_cols}; "
             f"impute or drop before filtering (see data/preprocessing.py)."
         )
 
-    dominated = np.zeros(n, dtype=bool)
-    for start in range(0, n, chunk_size):
-        end = min(start + chunk_size, n)
-        chunk = X[start:end]  # (c, m)
-        # ge[k, j] = True if chunk[k] >= X[j] on every attribute
-        ge = np.all(chunk[:, None, :] >= X[None, :, :], axis=2)  # (c, n)
-        gt = np.any(chunk[:, None, :] > X[None, :, :], axis=2)  # (c, n)
-        dominates = ge & gt  # (c, n): does chunk[k] dominate X[j]?
-        # zero out self-comparison (row start+k vs itself)
-        for k in range(end - start):
-            dominates[k, start + k] = False
-        dominated_by_chunk = dominates.any(axis=0)  # (n,) any candidate dominated by someone in this chunk
-        dominated |= dominated_by_chunk
+    dominated = _skyline_numba(X)
+    return pool.df.index[~dominated]
 
-    return df.index[~dominated]
+import numba
+
+@numba.njit(fastmath=True)
+def _skyline_numba(X: np.ndarray) -> np.ndarray:
+    n = X.shape[0]
+    m = X.shape[1]
+    dominated = np.zeros(n, dtype=numba.boolean)
+    for i in range(n):
+        if dominated[i]:
+            continue
+        for j in range(i + 1, n):
+            if dominated[j]:
+                continue
+            i_ge_j = True
+            j_ge_i = True
+            for k in range(m):
+                if X[i, k] < X[j, k]:
+                    i_ge_j = False
+                elif X[i, k] > X[j, k]:
+                    j_ge_i = False
+                if not i_ge_j and not j_ge_i:
+                    break
+            if i_ge_j and not j_ge_i:
+                dominated[j] = True
+            elif j_ge_i and not i_ge_j:
+                dominated[i] = True
+    return dominated
 
 
 def skyline_then_topsis(
-    df: pd.DataFrame,
+    pool: CandidatePool,
     weights: Mapping[str, float],
-    attribute_cols: Sequence[str],
     chunk_size: int = 500,
 ) -> pd.Series:
     """Filter to the skyline set, then rank that subset with TOPSIS.
@@ -100,20 +114,20 @@ def skyline_then_topsis(
     ``sort_values(ascending=False)`` over the returned Series always
     prefers a skyline member when one exists.
     """
-    sky_idx = skyline(df, attribute_cols, chunk_size=chunk_size)
-    sky_scores = topsis(df.loc[sky_idx], weights, attribute_cols)
+    sky_idx = skyline(pool, chunk_size=chunk_size)
+    sky_pool = CandidatePool(pool.df.loc[sky_idx], pool.attribute_cols)
+    sky_scores = topsis(sky_pool, weights)
 
-    full = pd.Series(-1.0, index=df.index, name="skyline_topsis_score")
+    full = pd.Series(-1.0, index=pool.df.index, name="skyline_topsis_score")
     full.loc[sky_idx] = sky_scores
     return full
 
 
 def rank_skyline_then_topsis(
-    df: pd.DataFrame,
+    pool: CandidatePool,
     weights: Mapping[str, float],
-    attribute_cols: Sequence[str],
 ) -> pd.DataFrame:
-    scores = skyline_then_topsis(df, weights, attribute_cols)
-    out = df.copy()
+    scores = skyline_then_topsis(pool, weights)
+    out = pool.df.copy()
     out["score"] = scores
     return out.sort_values("score", ascending=False)

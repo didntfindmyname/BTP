@@ -14,6 +14,7 @@ from typing import Mapping, Sequence
 
 import numpy as np
 import pandas as pd
+from agentic_selection.data.preprocessing import CandidatePool
 
 
 def _weights_to_array(
@@ -42,9 +43,8 @@ def _weights_to_array(
 
 
 def weighted_sum(
-    df: pd.DataFrame,
+    pool: CandidatePool,
     weights: Mapping[str, float],
-    attribute_cols: Sequence[str],
 ) -> pd.Series:
     """Score every row of ``df`` as a weighted sum of ``attribute_cols``.
 
@@ -66,30 +66,29 @@ def weighted_sum(
         rescaled to [0, 1] as a set (individual weighted sums already
         live in [0, 1] given [0,1] inputs and weights summing to 1).
     """
-    if len(attribute_cols) == 0:
+    if len(pool.attribute_cols) == 0:
         raise ValueError("attribute_cols must be non-empty")
-    for c in attribute_cols:
-        if c not in df.columns:
-            raise KeyError(f"attribute column '{c}' not found in df.columns={list(df.columns)}")
-    sub = df.loc[:, list(attribute_cols)]
+    for c in pool.attribute_cols:
+        if c not in pool.df.columns:
+            raise KeyError(f"attribute column '{c}' not found in df.columns={list(pool.df.columns)}")
+    sub = pool.df.loc[:, list(pool.attribute_cols)]
     if sub.isnull().any().any():
         bad_cols = sub.columns[sub.isnull().any()].tolist()
         raise ValueError(
             f"weighted_sum received NaN values in columns {bad_cols}; "
             f"impute or drop before scoring (see data/preprocessing.py)."
         )
-    w = _weights_to_array(weights, attribute_cols)
+    w = _weights_to_array(weights, pool.attribute_cols)
     scores = sub.to_numpy(dtype=float) @ w
-    return pd.Series(scores, index=df.index, name="weighted_sum_score")
+    return pd.Series(scores, index=pool.df.index, name="weighted_sum_score")
 
 
 def rank_weighted_sum(
-    df: pd.DataFrame,
+    pool: CandidatePool,
     weights: Mapping[str, float],
-    attribute_cols: Sequence[str],
 ) -> pd.DataFrame:
     """Convenience wrapper: returns df sorted best-first with a score column."""
-    scores = weighted_sum(df, weights, attribute_cols)
-    out = df.copy()
+    scores = weighted_sum(pool, weights)
+    out = pool.df.copy()
     out["score"] = scores
     return out.sort_values("score", ascending=False)

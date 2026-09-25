@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import pytest
+from agentic_selection.data.preprocessing import CandidatePool
 
 from agentic_selection.agent.perception import summarize_pool
 from agentic_selection.agent.reasoning import (
@@ -43,7 +44,7 @@ def test_parse_llm_json_non_object_json_raises():
 
 def test_build_prompt_contains_task_and_attributes():
     df = pd.DataFrame({"a": [0.1, 0.9], "b": [0.9, 0.1]})
-    perception = summarize_pool(df, ["a", "b"])
+    perception = summarize_pool(CandidatePool(df, ["a", "b"]))
     system, user = build_prompt("A test task description", perception, ["a", "b"])
     assert "a" in system and "b" in system
     assert "A test task description" in user
@@ -52,7 +53,7 @@ def test_build_prompt_contains_task_and_attributes():
 
 def test_build_prompt_includes_memory_digest_when_present():
     df = pd.DataFrame({"a": [0.1, 0.9], "b": [0.9, 0.1]})
-    perception = summarize_pool(df, ["a", "b"])
+    perception = summarize_pool(CandidatePool(df, ["a", "b"]))
     _, user_with = build_prompt("task", perception, ["a", "b"], memory_digest="past decision info")
     _, user_without = build_prompt("task", perception, ["a", "b"], memory_digest="")
     assert "past decision info" in user_with
